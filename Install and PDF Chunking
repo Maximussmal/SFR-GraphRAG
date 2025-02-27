@@ -1,0 +1,72 @@
+!pip install pdfplumber
+!pip install pytesseract
+!pip install pymupdf
+!pip install chromadb
+!pip install sentence_transformers
+
+!apt-get update
+!apt-get install tesseract-ocr
+!apt-get install libtesseract-dev
+
+import pdfplumber
+import pytesseract
+import pymupdf  # PyMuPDF
+
+from PIL import Image
+import chromadb
+
+from sentence_transformers import SentenceTransformer
+import os
+import io
+
+embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+
+
+def extract_text_from_pdf(pdf_path):
+    text_chunks = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text()
+            if text:
+                text_chunks.extend(chunk_text(text))
+    return text_chunks
+
+def extract_images_and_ocr(pdf_path):
+    images_texts = []
+    doc = pymupdf.open(pdf_path)
+    for page in doc:
+        for img in page.get_images(full=True):
+            xref = img[0]
+            base_image = doc.extract_image(xref)
+            image = Image.open(io.BytesIO(base_image["image"]))
+            ocr_text = pytesseract.image_to_string(image)
+            images_texts.append(ocr_text)
+    return images_texts
+
+def chunk_text(text, chunk_size=512, overlap=100):
+    words = text.split()
+    chunks = []
+    for i in range(0, len(words), chunk_size - overlap):
+        chunk = " ".join(words[i:i + chunk_size])
+        chunks.append(chunk)
+    return chunks
+
+def store_embeddings(text_chunks):
+    client = chromadb.PersistentClient(path="./chroma_db")
+    collection = client.get_or_create_collection(name="pdf_chunks")
+    embeddings = [embedding_model.encode(chunk).tolist() for chunk in text_chunks]
+    for i, chunk in enumerate(text_chunks):
+        collection.add(documents=[chunk], embeddings=[embeddings[i]], ids=[str(i)])
+    print("Embeddings stored successfully!")
+
+def process_pdf(pdf_path):
+    text_chunks = extract_text_from_pdf(pdf_path)
+    image_ocr_texts = extract_images_and_ocr(pdf_path)
+    all_chunks = text_chunks + image_ocr_texts
+    store_embeddings(all_chunks)
+    print("PDF processing completed!")
+
+# Change this path to the location of your PDF file
+pdf_path = "/content/syzygy-group-geschaeftsbericht-2023.pdf"  
+process_pdf(pdf_path)
+

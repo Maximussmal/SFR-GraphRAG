@@ -1,0 +1,54 @@
+embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+nlp = spacy.load("en_core_web_sm")
+
+token_ontology = {
+    "ORG": "Company",
+    "MONEY": "Financials",
+    "GPE": "Market",
+    "PERSON": "BoardMember",
+    "DATE": "Financials"
+}
+
+
+def extract_entities(text):
+    doc = nlp(text)
+    entities = {}
+    for ent in doc.ents:
+        if ent.label_ in token_ontology:
+            entity_type = token_ontology[ent.label_]
+            if entity_type not in entities:
+                entities[entity_type] = []
+            entities[entity_type].append(ent.text)
+    return entities
+
+
+def store_entities_in_neo4j(entities):
+    driver = GraphDatabase.driver("neo4j+s://3275bdc4.databases.neo4j.io", auth=("neo4j", "XZ0NdiRCo6to3KJO-KH0U5LE2CjSpSDNkW9qtmTGS20"))
+    with driver.session() as session:
+        for entity_type, values in entities.items():
+            for value in values:
+                query = f"""
+                MERGE (e:{entity_type} {{name: $value}})
+                """
+                session.run(query, value=value)
+    driver.close()
+    print("Entities stored in Neo4j!")
+
+def process_pdf(pdf_path):
+    text_chunks = extract_text_from_pdf(pdf_path)
+    image_ocr_texts = extract_images_and_ocr(pdf_path)
+    all_chunks = text_chunks + image_ocr_texts
+    store_embeddings(all_chunks)
+    entities = {}
+    for chunk in all_chunks:
+        extracted_entities = extract_entities(chunk)
+        for key, value in extracted_entities.items():
+            if key not in entities:
+                entities[key] = []
+            entities[key].extend(value)
+    store_entities_in_neo4j(entities)
+    print("PDF processing completed!")
+
+# Change this path to the location of your PDF file
+pdf_path = "/content/syzygy-group-geschaeftsbericht-2023.pdf"  
+process_pdf(pdf_path)

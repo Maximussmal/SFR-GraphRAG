@@ -1,0 +1,42 @@
+!pip install chromadb
+
+import chromadb
+from chromadb.api.types import Documents, Embeddings, IDs, Include, Where, WhereDocument
+
+client = chromadb.PersistentClient(path="./chroma_db")
+collection = client.get_or_create_collection(name="pdf_chunks")
+# The SimpleVectorIndex class has been removed. Chroma uses different methods now for indexing
+# You can directly use the Chroma client for adding and querying data.
+# Remove or comment the line related to vector_index
+
+def query_vector_database(query):
+    query_embedding = embedding_model.encode(query).tolist()
+    results = collection.query(
+        query_embeddings=[query_embedding], 
+        n_results=5
+    )  
+    return [result["documents"] for result in results]
+
+def query_vector_database(query):
+    query_embedding = embedding_model.encode(query).tolist()
+    results = collection.query(
+        query_embeddings=[query_embedding], 
+        n_results=5
+    )  
+
+def search_query(user_query):
+    results = query_vector_database(user_query)
+    print("Search Results:", results)
+    return results
+
+
+# Access the 'documents' list from the results dictionary
+    return results['documents'][0]
+
+# Change this path to the location of your PDF file
+pdf_path = "/content/syzygy-group-geschaeftsbericht-2023.pdf"  
+process_pdf(pdf_path)
+
+# Example search query
+user_query = "What is the revenue of the company?"
+search_query(user_query)

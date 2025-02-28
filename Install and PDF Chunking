@@ -3,6 +3,9 @@
 !pip install pymupdf
 !pip install chromadb
 !pip install sentence_transformers
+!pip install spacy
+!python -m spacy download en_core_web_sm
+!pip install neo4j
 
 !apt-get update
 !apt-get install tesseract-ocr
@@ -14,6 +17,9 @@ import pymupdf  # PyMuPDF
 
 from PIL import Image
 import chromadb
+
+from neo4j import GraphDatabase
+import spacy # Import the spacy library
 
 from sentence_transformers import SentenceTransformer
 import os

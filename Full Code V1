@@ -1,0 +1,139 @@
+#Install Section
+
+!pip install pdfplumber
+!pip install pytesseract
+!pip install pymupdf
+!pip install chromadb
+!pip install sentence_transformers
+!pip install neo4j
+!pip install spacy
+!pip install chromadb
+
+!apt-get update
+!apt-get install tesseract-ocr
+!apt-get install libtesseract-dev
+
+!python -m spacy download en_core_web_sm
+
+#Import Section
+
+import pdfplumber
+import pytesseract
+import pymupdf
+from PIL import Image
+import chromadb
+from sentence_transformers import SentenceTransformer
+import os
+import io
+from neo4j import GraphDatabase
+import spacy
+from collections import defaultdict
+from chromadb.api.types import Documents, Embeddings, IDs, Include, Where, WhereDocument
+
+client = chromadb.PersistentClient(path="./chroma_db")
+collection = client.get_or_create_collection(name="pdf_chunks")
+embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+nlp = spacy.load("en_core_web_sm")
+
+token_ontology = {
+    "ORG": "Company",
+    "MONEY": "Financials",
+    "GPE": "Market",
+    "PERSON": "BoardMember",
+    "DATE": "Financials"
+}
+
+#Code section incl. first RAG request
+
+def extract_text_from_pdf(pdf_path):
+    text_chunks = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text()
+            if text:
+                text_chunks.extend(chunk_text(text))
+    return text_chunks
+
+def extract_images_and_ocr(pdf_path):
+    images_texts = []
+    doc = pymupdf.open(pdf_path)
+    for page in doc:
+        for img in page.get_images(full=True):
+            xref = img[0]
+            base_image = doc.extract_image(xref)
+            image = Image.open(io.BytesIO(base_image["image"]))
+            ocr_text = pytesseract.image_to_string(image)
+            images_texts.append(ocr_text)
+    return images_texts
+
+def chunk_text(text, chunk_size=512, overlap=100):
+    words = text.split()
+    chunks = []
+    for i in range(0, len(words), chunk_size - overlap):
+        chunk = " ".join(words[i:i + chunk_size])
+        chunks.append(chunk)
+    return chunks
+
+def store_embeddings(text_chunks):
+    embeddings = [embedding_model.encode(chunk).tolist() for chunk in text_chunks]
+    for i, chunk in enumerate(text_chunks):
+        collection.add(documents=[chunk], embeddings=[embeddings[i]], ids=[str(i)])
+    print("Embeddings stored successfully! Total documents in DB:", collection.count())
+
+def extract_entities(text):
+    doc = nlp(text)
+    entities = defaultdict(list)
+    for ent in doc.ents:
+        if ent.label_ in token_ontology:
+            entity_type = token_ontology[ent.label_]
+            entities[entity_type].append(ent.text)
+    return entities
+
+def store_entities_in_neo4j(entities):
+    driver = GraphDatabase.driver("neo4j+s://3275bdc4.databases.neo4j.io", auth=("neo4j", "XZ0NdiRCo6to3KJO-KH0U5LE2CjSpSDNkW9qtmTGS20"))
+    with driver.session() as session:
+        for entity_type, values in entities.items():
+            for value in values:
+                # The problem was with this query. f-string curly braces were interfering with the Cypher query curly braces.
+                # Now we are using string formatting with %s for the entity_type, which solves the issue.
+                # Additionally, using f-string for value ensures it's properly escaped
+                query = """
+                MERGE (e:%s {name: '%s'})
+                """ % (entity_type, value)  
+                session.run(query) # No need to pass value separately now
+    driver.close()
+    print("Entities stored in Neo4j!")
+
+def process_pdf(pdf_path):
+    text_chunks = extract_text_from_pdf(pdf_path)
+    image_ocr_texts = extract_images_and_ocr(pdf_path)
+    all_chunks = text_chunks + image_ocr_texts
+    store_embeddings(all_chunks)
+    entities = defaultdict(list)
+    for chunk in all_chunks:
+        extracted_entities = extract_entities(chunk)
+        for key, value in extracted_entities.items():
+            entities[key].extend(value)
+    store_entities_in_neo4j(entities)
+    print("PDF processing completed!")
+
+def query_vector_database(query):
+    query_embedding = embedding_model.encode(query).tolist()
+    print("Query Embedding Generated")
+    results = collection.query(query_embeddings=[query_embedding], n_results=5)
+    if results and "documents" in results:
+        print("Raw Query Results:", results["documents"])
+        return results["documents"]
+    print("No results found!")
+    return []
+
+def search_query(user_query):
+    results = query_vector_database(user_query)
+    print("Final Search Results:", results)
+    return results
+
+pdf_path = "/content/syzygy-group-geschaeftsbericht-2023.pdf"
+process_pdf(pdf_path)
+
+user_query = "What is the revenue of the company?"
+search_query(user_query)

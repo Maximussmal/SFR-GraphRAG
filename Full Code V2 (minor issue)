@@ -114,7 +114,7 @@ def extract_entities(text):
     return entities
 
 def store_entities_in_neo4j(entities):
-    driver = GraphDatabase.driver("neo4j+s://3275bdc4.databases.neo4j.io", auth=("neo4j", "XZ0NdiRCo6to3KJO-KH0U5LE2CjSpSDNkW9qtmTGS20"))
+    driver = GraphDatabase.driver("neo4j+s://3275bdc4.databases.neo4j.io", auth=("neo4j", "xxx"))
     with driver.session() as session:
         for entity_type, values in entities.items():
             query = f"""

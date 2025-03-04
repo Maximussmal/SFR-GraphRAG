@@ -1,0 +1,145 @@
+!pip install -qU langchain_community
+!pip install pytesseract
+!pip install pymupdf
+!pip install chromadb
+!pip install sentence_transformers
+!pip install neo4j
+!pip install spacy
+!pip install chromadb
+!pip install pdfplumber --upgrade # The typo was here.  Should be 'pdfplumber' not 'pdfblumber'
+
+!apt-get update
+!apt-get install tesseract-ocr
+!apt-get install libtesseract-dev
+
+!python -m spacy download en_core_web_sm
+
+import pytesseract
+import pymupdf
+from PIL import Image
+import chromadb
+from sentence_transformers import SentenceTransformer
+import os
+import io
+from neo4j import GraphDatabase
+import spacy
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+from langchain_community.document_loaders import PDFPlumberLoader
+
+loader = PDFPlumberLoader("/content/syzygy-group-geschaeftsbericht-2023.pdf")
+
+client = chromadb.PersistentClient(path="./chroma_db")
+collection = client.get_or_create_collection(name="pdf_chunks")
+embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+nlp = spacy.load("en_core_web_sm")
+
+ontology = {
+    "nodes": {
+        "Company": ["name", "industry", "headquarters", "founded_year"],
+        "Financials": ["year", "revenue", "profit", "operating_income", "assets", "equity"],
+        "BusinessUnit": ["name", "location", "services"],
+        "Segment": ["name", "revenue", "profit"],
+        "Employee": ["name", "position", "department"],
+        "Customer": ["name", "industry", "contract_value"],
+        "Market": ["region", "growth_rate"],
+        "Competitor": ["name", "market_share"],
+        "SustainabilityMetric": ["metric_name", "value", "target"],
+        "BoardMember": ["name", "role", "tenure"],
+        "Investor": ["name", "share_percentage"]
+    },
+    "relationships": {
+        "HAS_FINANCIALS": ["Company", "Financials"],
+        "HAS_BUSINESS_UNIT": ["Company", "BusinessUnit"],
+        "OPERATES_IN": ["BusinessUnit", "Market"],
+        "COMPETES_WITH": ["Company", "Competitor"],
+        "HAS_EMPLOYEE": ["Company", "Employee"],
+        "SERVES": ["Company", "Customer"],
+        "HAS_INVESTOR": ["Company", "Investor"],
+        "GOVERNED_BY": ["Company", "BoardMember"],
+        "HAS_SEGMENT": ["Company", "Segment"],
+        "REPORTS_ON": ["Company", "SustainabilityMetric"]
+    }
+}
+
+def extract_text_from_pdf(pdf_path):
+    text_chunks = []
+    import pdfplumber
+    with pdfplumber.open(pdf_path) as pdf:
+        with ThreadPoolExecutor() as executor:
+            results = executor.map(lambda page: page.extract_text() or "", pdf.pages)
+            for text in results:
+                text_chunks.extend(chunk_text(text))
+    return text_chunks
+
+def extract_images_and_ocr(pdf_path):
+    images_texts = []
+    doc = pymupdf.open(pdf_path)
+    with ThreadPoolExecutor() as executor:
+        results = executor.map(process_image, [(doc, page) for page in doc])
+        for ocr_text in results:
+            if ocr_text:
+                images_texts.append(ocr_text)
+    return images_texts
+
+def process_image(params):
+    doc, page = params
+    ocr_texts = []
+    for img in page.get_images(full=True):
+        xref = img[0]
+        base_image = doc.extract_image(xref)
+        image = Image.open(io.BytesIO(base_image["image"]))
+        ocr_texts.append(pytesseract.image_to_string(image))
+    return " ".join(ocr_texts)
+
+def chunk_text(text, chunk_size=512, overlap=100):
+    words = text.split()
+    return [" ".join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size - overlap)]
+
+def store_embeddings(text_chunks):
+    embeddings = embedding_model.encode(text_chunks, batch_size=16, convert_to_list=True)
+    batch_data = [(str(i), text_chunks[i], embeddings[i]) for i in range(len(text_chunks))]
+    collection.add(documents=[d[1] for d in batch_data], embeddings=[d[2] for d in batch_data], ids=[d[0] for d in batch_data])
+    print("Embeddings stored successfully! Total documents in DB:", collection.count())
+
+def extract_entities(text):
+    doc = nlp(text)
+    entities = defaultdict(list)
+    for ent in doc.ents:
+        if ent.label_ in ontology["nodes"]:
+            entity_type = ent.label_
+            entity_name = ent.text.strip()
+            if entity_name and len(entity_name) > 2:
+                entities[entity_type].append(entity_name)
+    return entities
+
+def store_entities_in_neo4j(entities):
+    driver = GraphDatabase.driver("neo4j+s://3275bdc4.databases.neo4j.io", auth=("neo4j", "XZ0NdiRCo6to3KJO-KH0U5LE2CjSpSDNkW9qtmTGS20"))
+    with driver.session() as session:
+        for entity_type, values in entities.items():
+            query = f"""
+            UNWIND $values AS value
+            MERGE (e:{entity_type} {{name: value}})
+            """
+            session.run(query, values=values)
+    driver.close()
+    print("Entities stored in Neo4j!")
+
+def process_pdf(pdf_path):
+    with ThreadPoolExecutor() as executor:
+        text_future = executor.submit(extract_text_from_pdf, pdf_path)
+        image_future = executor.submit(extract_images_and_ocr, pdf_path)
+        text_chunks = text_future.result()
+        image_ocr_texts = image_future.result()
+    all_chunks = text_chunks + image_ocr_texts
+    store_embeddings(all_chunks)
+    entities = defaultdict(list)
+    for chunk in all_chunks:
+        extracted_entities = extract_entities(chunk)
+        for key, value in extracted_entities.items():
+            entities[key].extend(value)
+    store_entities_in_neo4j(entities)
+    print("PDF processing and Neo4j import completed!")
+
+pdf_path = "/content/syzygy-group-geschaeftsbericht-2023.pdf"
+process_pdf(pdf_path)

@@ -1,0 +1,30 @@
+#Cyper ontology for financial reports
+
+#Definition einer Ontologie für Geschäftsberichte
+ontology = {
+    "nodes": {
+        "Company": ["name", "industry", "headquarters", "founded_year"],
+        "Financials": ["year", "revenue", "profit", "operating_income", "assets", "equity"],
+        "BusinessUnit": ["name", "location", "services"],
+        "Segment": ["name", "revenue", "profit"],
+        "Employee": ["name", "position", "department"],
+        "Customer": ["name", "industry", "contract_value"],
+        "Market": ["region", "growth_rate"],
+        "Competitor": ["name", "market_share"],
+        "SustainabilityMetric": ["metric_name", "value", "target"],
+        "BoardMember": ["name", "role", "tenure"],
+        "Investor": ["name", "share_percentage"]
+    },
+    "relationships": {
+        "HAS_FINANCIALS": ["Company", "Financials"],
+        "HAS_BUSINESS_UNIT": ["Company", "BusinessUnit"],
+        "OPERATES_IN": ["BusinessUnit", "Market"],
+        "COMPETES_WITH": ["Company", "Competitor"],
+        "HAS_EMPLOYEE": ["Company", "Employee"],
+        "SERVES": ["Company", "Customer"],
+        "HAS_INVESTOR": ["Company", "Investor"],
+        "GOVERNED_BY": ["Company", "BoardMember"],
+        "HAS_SEGMENT": ["Company", "Segment"],
+        "REPORTS_ON": ["Company", "SustainabilityMetric"]
+    }
+}
